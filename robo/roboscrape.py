@@ -7,31 +7,38 @@
 # desc: scrapes robots.txt #
 # greetz fr0m: #9x,        #
 #              substance,  #
-#              and ce6     #
+#              and phaedo  #
 ############################
-#  vers: v1.0 (r0b0n3gr0)  #
+#        vers: v2.0        #
 ############################
 
 import sys
-from bs4 import BeautifulSoup
 import urllib3
 import utils
+from bs4 import BeautifulSoup
+from http.client import responses
+from colorama import Fore
+from colorama import Style
+
+# disable annoying HTTPS warning
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def connect(url):
   robot_append = "/robots.txt"
   robot_url = url + robot_append
-  # will color this message later
-  print("[*] trying to connect to: %s" % (robot_url))
-  """
-  You'll need a PoolManager instance to make requests.
-  This object handles all of the details of connection
-  pooling and thread safety so that you don't have to.
-  """
-  # we need to throw and exception if there is an invalid SSL cert
-  http = urllib3.PoolManager()
-  response = http.request('GET', robot_url, headers={'User-Agent': utils.random_user_agent()})
-  soup = BeautifulSoup(response.data, "lxml")
-  print(soup)
+
+  print(f"{Fore.BLUE}[*]{Style.RESET_ALL} Trying to connect to: {Style.BRIGHT}{robot_url}{Style.RESET_ALL}")
+
+  http = urllib3.PoolManager(cert_reqs='CERT_NONE')
+
+  try:
+    response = http.request('GET', robot_url, headers={'User-Agent': utils.random_user_agent()})
+  except urllib3.exceptions.HTTPError as err:
+    print(f"{Fore.RED}[-]{Style.RESET_ALL} Request failed: {err.reason}")
+
+  soup = BeautifulSoup(response.data, "html.parser")
+  results = gather_robots_txt(soup, robot_url)
+  crawl_robots_txt(results, url, http)
 
 def open_list(filename):
   try:
@@ -40,14 +47,60 @@ def open_list(filename):
       for url in lines:
         connect(url)
   except IOError:
-    print(utils.tc.FAIL + "[-]" + utils.tc.RESET + " %s doesn't exist!" % (filename))
+    print(f"{Fore.RED}[-]{Style.RESET_ALL} '{filename}' doesn't exist!")
+
+def gather_robots_txt(soup, url):
+  results = {"Allowed":[], "Disallowed":[]}
+  for line in str(soup).split("\n"):
+    if line.startswith("Allow"):
+      # if 'Allow' field is empty
+      if len(line.split(': ')) < 2:
+        print(f"{Fore.YELLOW}[!]{Style.RESET_ALL} Empty 'Allow' field in {url}")
+        continue
+      results["Allowed"].append(line.split(': ')[1].split(' ')[0])
+    if line.startswith("Disallow"):
+      # if 'Disallow' field is empty
+      if len(line.split(': ')) < 2:
+        print(f"{Fore.YELLOW}[!]{Style.RESET_ALL} Empty 'Disallow' field in {url}")
+        continue
+      results["Disallowed"].append(line.split(': ')[1].split(' ')[0])
+  return results
+
+def crawl_robots_txt(results, url, http):
+  print_robots_txt(results)
+  for x in results["Allowed"]:
+    try:
+      # don't follow fields with wildcards
+      if "*" in x:
+        continue
+      response = http.request('GET', url + x, headers={'User-Agent': utils.random_user_agent()})
+    except urllib3.exceptions.HTTPError as err:
+      print(f"{Fore.RED}[-]{Style.RESET_ALL} Request failed: {err.reason}")
+    print(f"{Fore.BLUE}[*]{Style.RESET_ALL} {url + x} -> {Fore.YELLOW}{response.status}{Style.RESET_ALL}{Style.BRIGHT} '{responses[response.status]}'{Style.RESET_ALL}")
+
+  for x in results["Disallowed"]:
+    try:
+      if "*" in x:
+        continue
+      response = http.request('GET', url + x, headers={'User-Agent': utils.random_user_agent()})
+    except urllib3.exceptions.HTTPError as err:
+      print(f"{Fore.RED}[-]{Style.RESET_ALL} Request failed: {err.reason}")
+    print(f"{Fore.BLUE}[*]{Style.RESET_ALL} {url + x} -> {Fore.YELLOW}{response.status}{Style.RESET_ALL}{Style.BRIGHT} '{responses[response.status]}'{Style.RESET_ALL}")
+
+def print_robots_txt(results):
+  for x in results["Allowed"]:
+    print(f"{Fore.GREEN}{x}{Style.RESET_ALL}")
+  for x in results["Disallowed"]:
+    print(f"{Fore.RED}{x}{Style.RESET_ALL}")
+
+def print_usage():
+  print(f"python3 {sys.argv[0]} <filename>")
 
 def main():
   if len(sys.argv) > 1:
     filename = sys.argv[1]
     open_list(filename)
   else:
-    print(utils.tc.FAIL + "[-]" + utils.tc.RESET + " add a filename!")
-
+    print_usage()
 
 main()
